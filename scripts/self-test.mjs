@@ -77,6 +77,15 @@ assert.equal(extractFeedback('rejected hunter2\nPassword: ', ['hunter2']), 'reje
 assert.match(redactSecrets('abc then done', ['abc']), /\[REDACTED\][\s\S]*under 4 characters/)
 assert.doesNotMatch(redactSecrets('heard hunter2 then done', ['hunter2']), /under 4 characters/)
 
+// A short secret must not be replaced before a longer one that contains it: doing so splits
+// the longer value, it stops matching, and half a password survives. This exact ordering
+// leak once put `demo-owl-[REDACTED]-PASS-2026` in a reveal result.
+assert.equal(
+  redactSecrets('ADMIN_USER=admin\nADMIN_PASSWORD=demo-owl-admin-PASS-2026', ['admin', 'demo-owl-admin-PASS-2026']),
+  'ADMIN_USER=[REDACTED]\nADMIN_PASSWORD=[REDACTED]',
+  'redaction is longest-first',
+)
+
 const terminal = new FakeTerminal()
 const credentials = new Map()
 let registeredRoute
@@ -459,5 +468,133 @@ for (const bad of ['file:///etc/passwd', 'javascript:alert(1)', 'ftp://a.test'])
 }
 assert.ok(validateBrowserFill({ prompt: 'x', selector: '#p', url: 'https://a.test/x' }), 'http(s) urls pass')
 
+// A login form has a credential field and an account field. Showing password strength for
+// the account name was a real bug; the inference decides from the selector, and an explicit
+// flag always wins.
+const loginPlan = validateBrowserFill({
+  prompt: 'x',
+  fields: [{ selector: '#login_field', label: '账号' }, { selector: '#password', label: '密码' }],
+})
+assert.equal(loginPlan.fields[0].secret, false, 'an account field is not a credential')
+assert.equal(loginPlan.fields[1].secret, true, 'a password field is')
+assert.equal(validateBrowserFill({ prompt: 'x', fields: [{ selector: '#f', secret: false, rules: { minLength: 8 } }] }).fields[0].secret, false, 'an explicit flag beats a rule')
+assert.equal(validateBrowserFill({ prompt: 'x', fields: [{ selector: 'input[autocomplete="username"]' }] }).fields[0].secret, false)
+assert.equal(validateBrowserFill({ prompt: 'x', fields: [{ selector: 'input[name="otp"]' }] }).fields[0].secret, true)
+assert.equal(validateBrowserFill({ prompt: 'x', selector: 'input[name="password"]' }).fields[0].secret, true)
+
+
+// --- secret_reveal: the value reaches the card, never the tool result ---
+const revealTool = registeredTools.get('secret_reveal')
+assert.equal(revealTool?.name, 'secret_reveal')
+
+class RevealTerminal {
+  output = new PassThrough()
+  writes = []
+  terminated = false
+  done
+  finish
+
+  constructor() {
+    this.done = new Promise((resolve) => { this.finish = resolve })
+  }
+
+  async write(text) { this.writes.push(text) }
+
+  async terminate() { this.terminated = true }
+}
+
+const REVEAL_ENV = [
+  'NODE_ENV=production',
+  'PORT=3000',
+  'ADMIN_PASSWORD=owl-admin-DO-NOT-LEAK',
+  `JWT_SECRET=${'a1b2c3d4'.repeat(8)}`,
+].join('\n') + '\n'
+
+const defaultSpawn = ctx.subprocess.spawnTerminal
+ctx.subprocess.spawnTerminal = async () => {
+  const fake = new RevealTerminal()
+  setTimeout(() => {
+    fake.output.write(REVEAL_ENV)
+    fake.output.end()
+    fake.finish({ exitCode: 0, signal: undefined })
+  }, 5)
+  return fake
+}
+
+async function waitForReveal(callId) {
+  for (let i = 0; i < 100; i += 1) {
+    await new Promise((resolve) => setTimeout(resolve, 5))
+    const state = (await callApi({ op: 'status', callId })).json
+    if (state.state === 'awaiting' && state.reveal?.entries) return state
+  }
+  return undefined
+}
+
+const revealRun = revealTool.execute({ command: 'cat /opt/app/.env', prompt: 'owl env file', label: 'owl secrets', format: 'dotenv' }, {
+  agent: { session: {} },
+  callId: 'self-test-reveal',
+  signal: new AbortController().signal,
+})
+const revealed = await waitForReveal('self-test-reveal')
+assert.equal(revealed?.state, 'awaiting', 'the card waits for the user instead of collapsing')
+assert.equal(revealed.reveal.entries.length, 4)
+const adminEntry = revealed.reveal.entries.find((entry) => entry.key === 'ADMIN_PASSWORD')
+assert.equal(adminEntry.value, 'owl-admin-DO-NOT-LEAK', 'the card receives the real value')
+assert.equal(adminEntry.secret, true, 'a password is masked by name')
+assert.equal(revealed.reveal.entries.find((entry) => entry.key === 'PORT').secret, false, 'a port number is not a credential')
+
+// Once the card names the token it already holds, the values stop riding along on the poll.
+const seen = (await callApi({ op: 'status', callId: 'self-test-reveal', seenReveal: revealed.reveal.token })).json
+assert.equal(seen.reveal.entries, undefined, 'a large reveal is not retransmitted every tick')
+assert.equal(seen.reveal.entryCount, 4)
+
+const ack = await callApi({ op: 'reveal-ack', callId: 'self-test-reveal', save: true })
+assert.equal(ack.json.ok, true)
+const revealResult = await revealRun
+assert.equal(revealResult.status, 'completed')
+assert.equal(revealResult.revealed, 4)
+assert.ok(revealResult.keys.includes('ADMIN_PASSWORD'))
+assert.equal(revealResult.output.includes('owl-admin-DO-NOT-LEAK'), false, 'the value must never reach the result')
+assert.match(revealResult.output, /ADMIN_PASSWORD=\[REDACTED\]/, 'the model sees the key, not the value')
+assert.equal(revealResult.output.includes('PORT=3000'), true, 'a non-secret value stays legible')
+assert.equal(revealTool.output.render({}, revealResult).map((part) => part.text).join('').includes('owl-admin-DO-NOT-LEAK'), false)
+const savedRefs = [...credentials.entries()].filter(([key]) => key.includes('ADMIN_PASSWORD'))
+assert.equal(savedRefs.length, 1, 'only the secret entry is written to the vault')
+assert.equal(savedRefs[0][1], 'owl-admin-DO-NOT-LEAK')
+
+// Dismissing the card without confirming cancels the call; the values still never surface.
+const cancelRun = revealTool.execute({ command: 'cat /opt/app/.env', prompt: 'owl env file', keys: ['ADMIN_PASSWORD'] }, {
+  agent: { session: {} },
+  callId: 'self-test-reveal-cancel',
+  signal: new AbortController().signal,
+})
+const cancelState = await waitForReveal('self-test-reveal-cancel')
+assert.equal(cancelState.reveal.entries.length, 1, 'the keys filter narrows the card')
+assert.equal(cancelState.reveal.entries[0].key, 'ADMIN_PASSWORD')
+const cancelled = await callApi({ op: 'reveal-cancel', callId: 'self-test-reveal-cancel' })
+assert.equal(cancelled.json.ok, true)
+const cancelResult = await cancelRun
+assert.equal(cancelResult.status, 'cancelled')
+assert.equal(cancelResult.output.includes('owl-admin-DO-NOT-LEAK'), false, 'a cancelled reveal still never leaks')
+
+// An empty result is reported, not guessed at.
+ctx.subprocess.spawnTerminal = async () => {
+  const fake = new RevealTerminal()
+  setTimeout(() => {
+    fake.output.write('nothing useful here\n')
+    fake.output.end()
+    fake.finish({ exitCode: 0, signal: undefined })
+  }, 5)
+  return fake
+}
+const emptyResult = await revealTool.execute({ command: 'echo nothing useful here', prompt: 'x', format: 'dotenv' }, {
+  agent: { session: {} },
+  callId: 'self-test-reveal-empty',
+  signal: new AbortController().signal,
+})
+assert.equal(emptyResult.status, 'completed')
+assert.match(emptyResult.output, /found nothing to show/)
+ctx.subprocess.spawnTerminal = defaultSpawn
+
 for (const cleanup of cleanups.reverse()) cleanup()
-console.log('self-test passed: host receives secret in memory, injects via PTY, redacts output, stores only after opt-in, reports a rejection reason on retry, and stops waiting when the CLI exits')
+console.log('self-test passed: host receives secret in memory, injects via PTY, redacts output, stores only after opt-in, reports a rejection reason on retry, stops waiting when the CLI exits, and reveals stored secrets without putting a value in the tool result')

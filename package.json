@@ -1,7 +1,7 @@
 {
   "name": "dsh-secret-form",
-  "version": "0.1.0",
-  "description": "Secure secret-input cards for DSH: terminal PTY, sidebar browser, and Ego",
+  "version": "0.2.0",
+  "description": "Secure secret cards for DSH: terminal PTY, sidebar browser, Ego, and reveal stored secrets without exposing them to the model",
   "type": "module",
   "main": "lib/index.js",
   "exports": {

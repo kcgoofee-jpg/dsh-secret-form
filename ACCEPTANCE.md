@@ -109,6 +109,63 @@ npm run self-test && npm run check-tokens && npm run check-readme
 
 ---
 
+## F. GitHub 登录（内置面板，真实站点）
+
+**前置**：DSH 右侧浏览器面板打开 `https://github.com/login`，且该面板**未登录**。
+
+```json
+{
+  "engine": "dsh",
+  "url": "https://github.com/login",
+  "fields": [
+    { "selector": "#login_field", "label": "账号" },
+    { "selector": "#password", "label": "密码" }
+  ],
+  "submit_selector": "input[type=\"submit\"]",
+  "verify_selector": "body",
+  "autocomplete": "current-password",
+  "prompt": "登录 GitHub"
+}
+```
+
+| 判据 | 预期 |
+|---|---|
+| 两张卡 | 先「账号」后「密码」，标题分别带 `· 账号` / `· 密码` |
+| 账号卡 | **普通文本框**：明文可见、没有强度条、没有「保存到凭据库」 |
+| 密码卡 | 圆点遮罩 + 眼睛按钮 + 强度条 + 保存勾选框 |
+| 提交后 | 页面真的进到 GitHub 首页，结果末尾出现 `[page says]` |
+| 结果正文 | 不含账号与密码原文 |
+| 密码错时 | `[page says]` 里能直接看到 GitHub 自己那句 `Incorrect username or password` |
+
+---
+
+## G. 展示密钥（`secret_reveal`）
+
+**前置**：一台能免密 `ssh` 的服务器，上面有个 `.env`。
+
+```json
+{
+  "command": "ssh owl-new 'cat /opt/service-tools/.env'",
+  "prompt": "owl-lax 后台管理界面的环境变量",
+  "label": "owl 服务器密钥",
+  "format": "dotenv"
+}
+```
+
+| 判据 | 预期 |
+|---|---|
+| 卡片 | 自动弹出，每项一行：等宽键名 + 蓝底「密钥」标签 + 圆点 |
+| 单条显示 | 点「显示」出明文，再点回圆点；圆点数量固定，**不暴露长度** |
+| 单条复制 | 剪贴板只有那一项的值 |
+| 全部复制 | 剪贴板是 `KEY=VALUE` 换行拼接 |
+| 工具结果 | 只有键名列表和 `KEY=[REDACTED]`，**没有任何明文** |
+| 非密钥项 | 例如 `PORT=3000` 直接显示，不打码 |
+| 关闭 | 点「完成」→ `completed`；点 × / Esc → `cancelled` |
+| 勾选保存 | 结果末尾出现 `DSH_SECRET_…_KEYNAME`，`~/.dsh/.credentials.yaml` 里能对应上 |
+| 命令中途要密码 | 先弹输入卡（ssh 私钥口令），填完才出密钥卡 |
+
+---
+
 ## 已知边界
 
 | 现象 | 原因 |

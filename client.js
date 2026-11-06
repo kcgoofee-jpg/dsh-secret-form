@@ -205,7 +205,19 @@
             }
           }
           if (!landed) {
-            await api({ op: 'dsh-result', callId, ok: false, detail: `field ${index + 1}/${fill.fields.length} (${selector}): ${detail}` }).catch(() => {})
+            // A selector that does not match is nearly always the wrong page, and the caller
+            // cannot see which page the panel is on. Report it, plus how many password fields
+            // exist, so the next attempt can be corrected instead of guessed.
+            let where = 'unknown page'
+            try {
+              const seen = await pool[0].executeJavaScript(`(() => ({
+                url: location.href,
+                passwordFields: document.querySelectorAll('input[type=\"password\"]').length,
+                inputs: Array.from(document.querySelectorAll('input')).slice(0, 8).map((el) => ({ type: el.type, name: el.name, id: el.id })),
+              }))()`)
+              where = `${(seen && seen.url) || 'unknown page'} [${(seen && seen.passwordFields) || 0} password field(s); inputs: ${JSON.stringify((seen && seen.inputs) || []).slice(0, 240)}]`
+            } catch { /* a diagnostic must never mask the real failure */ }
+            await api({ op: 'dsh-result', callId, ok: false, detail: `field ${index + 1}/${fill.fields.length} (${selector}): ${detail} — panel shows ${where}` }).catch(() => {})
             return
           }
           detail = `field ${index + 1}/${fill.fields.length} filled (${landedLengths[index] ?? '?'} chars) in ${landed}`
@@ -284,6 +296,20 @@
         .dsh-secret-button.primary{border-color:transparent;background:var(--dsw-alias-button-contrast-fill,#3c4048);color:var(--dsw-alias-label-primary-foreground,#fff)}
         .dsh-secret-button.primary:hover:not(:disabled){filter:brightness(1.15)}
         .dsh-secret-button:disabled{opacity:.4;cursor:default}
+
+        .dsh-secret-modal.wide{width:min(560px,94vw)}
+        .dsh-secret-reveal{margin:2px 0 0;padding:0 10px;border:1px solid var(--dsw-alias-border-l1,#0000000a);border-radius:var(--dsw-radius-md,12px);background:var(--dsw-alias-bg-base,#fff);max-height:min(46vh,400px);overflow:auto}
+        .dsh-secret-reveal-row{padding:9px 0;border-top:1px solid var(--dsw-alias-border-l1,#0000000a)}
+        .dsh-secret-reveal-row:first-child{border-top:0}
+        .dsh-secret-reveal-head{display:flex;align-items:center;gap:8px;margin-bottom:4px}
+        .dsh-secret-reveal-key{flex:1;min-width:0;font-family:var(--dsh-font-family-code-default,ui-monospace,SFMono-Regular,Menlo,monospace);font-size:12px;line-height:18px;font-weight:600;color:var(--dsw-alias-label-primary,#0f1115);overflow-wrap:anywhere}
+        .dsh-secret-reveal-tag{flex:none;height:18px;padding:0 6px;border-radius:999px;background:color-mix(in srgb,var(--dsw-alias-brand-primary,#0f1115) 10%,transparent);color:var(--dsw-alias-brand-primary,#0f1115);font:var(--dsw-font-xxxs-11,11px/18px -apple-system,sans-serif);font-weight:500}
+        .dsh-secret-reveal-tools{display:flex;gap:4px;flex:none}
+        .dsh-secret-mini{height:24px;padding:0 9px;border:1px solid var(--dsw-alias-border-l2,#0000001a);border-radius:999px;background:transparent;color:var(--dsw-alias-label-secondary,#61666b);font:var(--dsw-font-xxxs-11,11px/14px -apple-system,sans-serif);cursor:pointer;transition:background .12s ease}
+        .dsh-secret-mini:hover:not(:disabled){background:color-mix(in srgb,var(--dsw-alias-label-primary,#0f1115) 6%,transparent);color:var(--dsw-alias-label-primary,#0f1115)}
+        .dsh-secret-mini:disabled{opacity:.45;cursor:default}
+        .dsh-secret-reveal-value{font-family:var(--dsh-font-family-code-default,ui-monospace,SFMono-Regular,Menlo,monospace);font-size:12px;line-height:18px;white-space:pre-wrap;overflow-wrap:anywhere;max-height:132px;overflow:auto;color:var(--dsw-alias-label-primary,#0f1115)}
+        .dsh-secret-reveal-value.masked{color:var(--dsw-alias-label-tertiary,#5c626b);letter-spacing:.16em;user-select:none}
         @media(max-width:520px){.dsh-secret-modal{width:94vw;padding:18px 18px 20px;border-radius:var(--dsw-radius-xl,20px)}.dsh-secret-foot{flex-direction:column;align-items:stretch;gap:12px}.dsh-secret-actions{justify-content:flex-end}.dsh-secret-actions .dsh-secret-button{flex:1}}
       `
 
@@ -309,6 +335,8 @@
         const [busy, setBusy] = React.useState(false)
         const [error, setError] = React.useState('')
         const inputRef = React.useRef(null)
+        // An account name is not a credential: no mask, no strength meter, no vault checkbox.
+        const isSecret = state.secret !== false
 
         React.useEffect(() => {
           inputRef.current?.focus()
@@ -324,9 +352,10 @@
           setBusy(true)
           setError('')
           try {
-            await api({ op: 'submit', callId, challenge: state.challenge, value, save })
+            const saveChoice = isSecret ? save : false
+            await api({ op: 'submit', callId, challenge: state.challenge, value, save: saveChoice })
             setValue('')
-            onSettled('submit', save)
+            onSettled('submit', saveChoice)
           } catch (err) {
             setError(err?.message || '提交失败，请重试。')
             setBusy(false)
@@ -351,27 +380,189 @@
               h('button', { className: 'dsh-secret-close', type: 'button', onClick: () => void cancel(), disabled: busy, 'aria-label': 'Cancel' }, '×')),
             retry ? h('div', { className: 'dsh-secret-again' }, `第 ${state.promptNumber}/${state.maxPromptCount ?? 8} 次输入`) : null,
             state.context ? h('div', { className: 'dsh-secret-context' }, state.context) : null,
-            h('div', { className: 'dsh-secret-prompt' }, state.prompt || '请输入当前这一处输入框的值。'),
+            // The box exists for a terminal's own prompt line ("Password:"). A browser field
+            // has nothing to add -- its name is already the title.
+            state.prompt ? h('div', { className: 'dsh-secret-prompt' }, state.prompt) : null,
             state.feedback ? h('div', { className: 'dsh-secret-feedback' }, state.feedback) : null,
             h('div', { className: 'dsh-secret-field' },
               h('div', { className: 'dsh-secret-inputwrap' },
-                h('input', { ref: inputRef, id: 'dsh-secret-value', className: 'dsh-secret-input', type: visible ? 'text' : 'password', value, autoComplete: state.autocomplete || 'new-password', onChange: (event) => setValue(event.target.value), onPaste: (event) => event.stopPropagation(), disabled: busy, maxLength: 4096,
+                h('input', { ref: inputRef, id: 'dsh-secret-value', className: 'dsh-secret-input', type: !isSecret || visible ? 'text' : 'password', value, autoComplete: state.autocomplete || (isSecret ? 'new-password' : 'username'), onChange: (event) => setValue(event.target.value), onPaste: (event) => event.stopPropagation(), disabled: busy, maxLength: 4096,
                   'aria-invalid': error ? 'true' : undefined,
                   'aria-describedby': [note ? 'dsh-secret-note' : '', error ? 'dsh-secret-error' : ''].filter(Boolean).join(' ') || undefined }),
-                h('button', { className: 'dsh-secret-eye', type: 'button', onClick: () => setVisible((current) => !current), 'aria-label': visible ? '隐藏输入' : '显示输入', title: visible ? '隐藏' : '显示' }, h(EyeIcon, { off: visible }))),
-              strength > 0
+                isSecret
+                  ? h('button', { className: 'dsh-secret-eye', type: 'button', onClick: () => setVisible((current) => !current), 'aria-label': visible ? '隐藏输入' : '显示输入', title: visible ? '隐藏' : '显示' }, h(EyeIcon, { off: visible }))
+                  : null),
+              isSecret && strength > 0
                 ? h('div', { className: 'dsh-secret-meter' }, [1, 2, 3, 4].map((segment) => h('span', { key: segment, className: segment <= strength ? `on${strength}` : '' })))
                 : null,
-              note ? h('div', { className: 'dsh-secret-note', id: 'dsh-secret-note', 'aria-live': 'polite' }, note) : null,
+              isSecret && note ? h('div', { className: 'dsh-secret-note', id: 'dsh-secret-note', 'aria-live': 'polite' }, note) : null,
               error ? h('div', { className: 'dsh-secret-error', id: 'dsh-secret-error', role: 'alert' }, error) : null),
-            h('label', { className: 'dsh-secret-save' },
+            isSecret ? h('label', { className: 'dsh-secret-save' },
               h('input', { type: 'checkbox', checked: save, onChange: (event) => setSave(event.target.checked), disabled: busy }),
-              h('span', null, '安全保存到凭据库')),
+              h('span', null, '安全保存到凭据库')) : null,
             h('footer', { className: 'dsh-secret-foot' },
-              h('div', { className: 'dsh-secret-hint' }, '不会进入对话记录，只写入当前这一处输入框。'),
+              h('div', { className: 'dsh-secret-hint' }, '不会进入对话记录。'),
               h('div', { className: 'dsh-secret-actions' },
                 h('button', { className: 'dsh-secret-button', type: 'button', onClick: () => void cancel(), disabled: busy }, '取消'),
                 h('button', { className: 'dsh-secret-button primary', type: 'button', onClick: () => void submit(), disabled: busy || !value || blockedByRules }, busy ? '提交中…' : '提交')))))
+      }
+
+      // Clipboard access can be refused (no user gesture, insecure context). The legacy
+      // textarea path keeps "copy" working instead of silently doing nothing.
+      async function copyText(text) {
+        try {
+          if (navigator.clipboard?.writeText) { await navigator.clipboard.writeText(text); return true }
+        } catch { /* fall through to the legacy path */ }
+        try {
+          const area = document.createElement('textarea')
+          area.value = text
+          area.setAttribute('readonly', '')
+          area.style.cssText = 'position:fixed;top:-1000px;left:-1000px;opacity:0'
+          document.body.appendChild(area)
+          area.select()
+          const ok = document.execCommand('copy')
+          area.remove()
+          return ok
+        } catch { return false }
+      }
+
+      // A fixed mask, never one dot per character: the mask itself must not leak the length.
+      const MASK = '••••••••••••'
+
+      function RevealModal({ callId, reveal, label, onSettled }) {
+        const entries = reveal.entries || []
+        const [shown, setShown] = React.useState(() => new Set())
+        const [save, setSave] = React.useState(false)
+        const [copied, setCopied] = React.useState('')
+        const [busy, setBusy] = React.useState(false)
+
+        const toggle = (key) => setShown((current) => {
+          const next = new Set(current)
+          if (next.has(key)) next.delete(key)
+          else next.add(key)
+          return next
+        })
+        const copyOne = async (entry) => {
+          if (!(await copyText(entry.value))) return
+          setCopied(entry.key)
+          setTimeout(() => setCopied((current) => (current === entry.key ? '' : current)), 1400)
+        }
+        const copyAll = async () => {
+          if (!(await copyText(entries.map((entry) => `${entry.key}=${entry.value}`).join('\n')))) return
+          setCopied('__all__')
+          setTimeout(() => setCopied((current) => (current === '__all__' ? '' : current)), 1400)
+        }
+        const settle = async (op) => {
+          if (busy) return
+          setBusy(true)
+          try { await api({ op, callId, save }) } catch { /* the host may already have settled */ }
+          onSettled()
+        }
+        const keyDown = (event) => {
+          if (event.key === 'Escape' && !busy) { event.preventDefault(); void settle('reveal-cancel') }
+        }
+
+        return h('div', { className: 'dsh-secret-mask', onMouseDown: (event) => { if (event.target === event.currentTarget && !busy) void settle('reveal-cancel') } },
+          h('section', { className: 'dsh-secret-modal wide', role: 'dialog', 'aria-modal': 'true', onKeyDown: keyDown },
+            h('header', { className: 'dsh-secret-head' },
+              h('div', { className: 'dsh-secret-heading' }, label || '密钥'),
+              h('button', { className: 'dsh-secret-close', type: 'button', onClick: () => void settle('reveal-cancel'), disabled: busy, 'aria-label': '关闭' }, '×')),
+            reveal.context ? h('div', { className: 'dsh-secret-context' }, reveal.context) : null,
+            h('div', { className: 'dsh-secret-reveal' }, entries.map((entry) =>
+              h('div', { className: 'dsh-secret-reveal-row', key: entry.key },
+                h('div', { className: 'dsh-secret-reveal-head' },
+                  h('span', { className: 'dsh-secret-reveal-key' }, entry.key),
+                  entry.secret ? h('span', { className: 'dsh-secret-reveal-tag' }, '密钥') : null,
+                  h('div', { className: 'dsh-secret-reveal-tools' },
+                    entry.secret ? h('button', { className: 'dsh-secret-mini', type: 'button', onClick: () => toggle(entry.key), disabled: busy }, shown.has(entry.key) ? '隐藏' : '显示') : null,
+                    h('button', { className: 'dsh-secret-mini', type: 'button', onClick: () => void copyOne(entry), disabled: busy }, copied === entry.key ? '已复制' : '复制'))),
+                h('div', { className: `dsh-secret-reveal-value${entry.secret && !shown.has(entry.key) ? ' masked' : ''}` },
+                  entry.secret && !shown.has(entry.key) ? MASK : (entry.value.length > 0 ? entry.value : '（空）'))))),
+            reveal.truncated ? h('div', { className: 'dsh-secret-note' }, '条目太多，只显示了一部分。') : null,
+            h('label', { className: 'dsh-secret-save' },
+              h('input', { type: 'checkbox', checked: save, onChange: (event) => setSave(event.target.checked), disabled: busy }),
+              h('span', null, '把密钥保存到凭据库')),
+            h('footer', { className: 'dsh-secret-foot' },
+              h('div', { className: 'dsh-secret-hint' }, '只在这个卡片里，不会进入对话记录。'),
+              h('div', { className: 'dsh-secret-actions' },
+                h('button', { className: 'dsh-secret-button', type: 'button', onClick: () => void copyAll(), disabled: busy }, copied === '__all__' ? '已复制' : '全部复制'),
+                h('button', { className: 'dsh-secret-button primary', type: 'button', onClick: () => void settle('reveal-ack'), disabled: busy }, busy ? '处理中…' : '完成')))))
+      }
+
+      // The reveal card has no input: the host reads the secret, sends it here, and waits
+      // until the user is done looking. Nothing about the values ever reaches the model.
+      function SecretRevealRow(props) {
+        const callId = props.callId
+        const block = props.block
+        const fallbackLabel = block?.args?.text?.('label') || '密钥'
+        const [state, setState] = React.useState({ state: 'starting' })
+        const [reveal, setReveal] = React.useState(null)
+        const [open, setOpen] = React.useState(false)
+        const seenRef = React.useRef('')
+        const phaseRef = React.useRef(props.phase)
+        phaseRef.current = props.phase
+        const phase = props.phase
+
+        React.useEffect(() => {
+          activeCallIds.add(callId)
+          let stopped = false
+          let timer
+          const poll = async () => {
+            let next = null
+            try { next = await api({ op: 'status', callId, seenReveal: seenRef.current || undefined }) } catch { next = null }
+            if (stopped) return
+            if (next) {
+              setState(next)
+              // The values ride along once; afterwards the poll only names the token it
+              // already holds, so a large reveal is not retransmitted on every tick.
+              if (next.reveal?.entries) {
+                seenRef.current = next.reveal.token
+                setReveal(next.reveal)
+                setOpen(true)
+              }
+            }
+            if (phaseRef.current === 'result') {
+              setState((current) => (ACTIVE_STATES.has(current.state) ? { ...current, state: 'completed' } : current))
+              return
+            }
+            timer = setTimeout(poll, 700)
+          }
+          void poll()
+          return () => {
+            stopped = true
+            clearTimeout(timer)
+            activeCallIds.delete(callId)
+          }
+        }, [callId])
+
+        const settled = phase === 'result' || !ACTIVE_STATES.has(state.state)
+        const title = reveal?.label || state.label || fallbackLabel
+
+        if (settled) {
+          const note = state.state === 'failed'
+            ? (state.message || '执行失败')
+            : state.state === 'cancelled'
+              ? '已取消'
+              : '已完成'
+          return h('div', { className: 'dsh-secret-done', title: `${title} · ${note}` },
+            h('span', { className: 'dsh-secret-done-dot' }),
+            h('span', { className: 'dsh-secret-done-label' }, title),
+            h('span', { className: 'dsh-secret-done-note' }, `· ${note}`))
+        }
+
+        const status = reveal
+          ? `查看 ${reveal.entries.length} 项，只在这个卡片里`
+          : state.state === 'running'
+            ? '正在读取…'
+            : '正在启动受控终端…'
+        return h(React.Fragment, null,
+          h('div', { className: 'dsh-secret-card', 'data-secret-form-call': callId },
+            h('div', { className: 'dsh-secret-icon' }, h(Icon)),
+            h('div', { className: 'dsh-secret-copy' },
+              h('div', { className: 'dsh-secret-title' }, title),
+              h('div', { className: 'dsh-secret-sub' }, status)),
+            h('button', { className: 'dsh-secret-open', type: 'button', disabled: !reveal, onClick: () => setOpen(true) }, '查看')),
+          open && reveal ? h(RevealModal, { callId, reveal, label: title, onSettled: () => { setOpen(false); setReveal(null) } }) : null)
       }
 
       function SecretExecRow(props) {
@@ -420,7 +611,9 @@
 
         const settled = phase === 'result' || !ACTIVE_STATES.has(state.state)
         const awaiting = !settled && state.state === 'awaiting' && Boolean(state.challenge)
-        const title = label || '安全输入'
+        // The host names each card ("GitHub 登录 · GitHub 账号"); before the first poll the
+        // tool argument is the best available title.
+        const title = state.label || label || '安全输入'
 
         // A rejected secret comes straight back as a fresh prompt. Reopen the modal on
         // the user's own continuation, so retrying does not require hunting for the card.
@@ -477,12 +670,14 @@
 
         // The same card serves every tool that parks a secret in a live target: the
         // terminal PTY and the Ego Lite browser share one host-side request map and
-        // one status endpoint, so only the tool key list differs.
-        for (const key of ['secret_exec', 'secret_browser']) {
+        // one status endpoint, so only the tool key list differs. `secret_reveal` reads
+        // instead of writes, so it gets the reveal variant of the same card.
+        const rows = { secret_exec: SecretExecRow, secret_browser: SecretExecRow, secret_reveal: SecretRevealRow }
+        for (const [key, Row] of Object.entries(rows)) {
           ctx.slots.inject('tool.call.toolview', () => ctx.slots.register({
             name: 'tool.call.toolview',
             key,
-          }, SecretExecRow))
+          }, Row))
         }
         ctx.effect(() => () => {
           for (const callId of activeCallIds) void api({ op: 'cancel', callId }).catch(() => {})
