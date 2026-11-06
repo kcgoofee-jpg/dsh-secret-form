@@ -1,9 +1,16 @@
 import assert from 'node:assert/strict'
+import { readFileSync, statSync, unlinkSync } from 'node:fs'
+import { tmpdir } from 'node:os'
+import { join } from 'node:path'
+import { fileURLToPath } from 'node:url'
+import { dirname, resolve } from 'node:path'
 import { EventEmitter } from 'node:events'
 import { PassThrough } from 'node:stream'
 import { apply } from '../lib/index.js'
 import { clampTimeout, compilePromptPatterns, extractFeedback, isSecretPrompt, promptLine, redactSecrets, validateRules, validateSubmit } from '../lib/core.js'
 import { buildEgoScript, clampBrowserTimeout, clampVerifyDelay, validateBrowserFill } from '../lib/browser.js'
+
+const here = dirname(fileURLToPath(import.meta.url))
 
 class FakeTerminal {
   output = new PassThrough()
@@ -103,7 +110,10 @@ const ctx = {
   },
   sandboxPolicy: { resolve: () => ({ mode: 'danger-full-access' }) },
   workingDirectory: { ensure: async () => '/tmp' },
-  credentials: { set: async (key, value) => credentials.set(key, value) },
+  credentials: {
+    set: async (key, value) => credentials.set(key, value),
+    resolve: async (ref) => (credentials.has(ref) ? { value: credentials.get(ref), source: 'test' } : undefined),
+  },
   get: () => undefined,
   effect: (effect) => {
     const cleanup = effect()
@@ -235,6 +245,7 @@ async function awaitState(callId, handler, predicate) {
 
 const first = await awaitState('retry-call', retryRoute, (next) => next.state === 'awaiting')
 assert.equal(first.promptNumber, 1)
+assert.equal(first.attempt, 1, 'the first prompt is attempt 1')
 assert.equal(first.feedback, undefined, 'the first prompt has nothing to report')
 
 await callApi({ op: 'submit', callId: 'retry-call', challenge: first.challenge, value: 'wrong-one', save: false }, retryRoute)
@@ -242,6 +253,7 @@ await callApi({ op: 'submit', callId: 'retry-call', challenge: first.challenge, 
 const second = await awaitState('retry-call', retryRoute, (next) => next.state === 'awaiting' && next.promptNumber === 2)
 assert.equal(second.state, 'awaiting', 'a rejected secret produces a fresh prompt')
 assert.equal(second.promptNumber, 2)
+assert.equal(second.attempt, 2, 'a second prompt for the same field is attempt 2')
 assert.equal(second.feedback, 'Sorry, try again.', 'the CLI rejection reason reaches the card')
 assert.notEqual(second.challenge, first.challenge, 'every prompt gets its own challenge')
 
@@ -443,6 +455,34 @@ let carrierArg
 await probeCarrier({ requestRejection: (arg) => { carrierArg = arg; return undefined } })
 assert.deepEqual(Object.keys(carrierArg ?? {}), ['headers'], 'the carrier receives { headers }, not raw headers')
 
+// --- a browser field is not a retry ---
+// The retry badge keys off `attempt`. A second FIELD of the same form must not show it,
+// which is why the field index and the attempt counter are separate numbers.
+const browserRun = secretBrowser.execute({
+  prompt: 'sign in',
+  label: 'login',
+  fields: [{ selector: '#account', label: '账号' }, { selector: '#password', label: '密码' }],
+}, { agent: { session: {} }, callId: 'self-test-browser', signal: new AbortController().signal })
+const firstField = await awaitState('self-test-browser', registeredRoute, (next) => next.state === 'awaiting')
+assert.equal(firstField.promptNumber, 1)
+assert.equal(firstField.attempt, 0, 'a browser field is not an attempt')
+assert.equal(firstField.secret ?? false, false, 'an account field is not a credential')
+await callApi({ op: 'submit', callId: 'self-test-browser', challenge: firstField.challenge, value: 'someone@example.test', save: false })
+const secondField = await awaitState('self-test-browser', registeredRoute, (next) => next.state === 'awaiting' && next.promptNumber === 2)
+assert.equal(secondField.attempt, 0, 'the second field of a form is still not a retry')
+assert.equal(secondField.secret, true, 'a password field is a credential')
+assert.match(secondField.label, /密码/, 'the card title names the field')
+await callApi({ op: 'cancel', callId: 'self-test-browser' })
+const browserCancelled = await browserRun
+assert.equal(browserCancelled.status, 'cancelled')
+assert.match(browserCancelled.output, /浏览器未被修改/)
+
+// --- copy guard: the wording this project deliberately dropped must not come back ---
+const clientSource = readFileSync(resolve(here, '../client.js'), 'utf8')
+for (const banned of ['满足全部要求', '安全保存到凭据库', '正在启动受控终端', '正在等待终端提示', '打开安全表单']) {
+  assert.equal(clientSource.includes(banned), false, `client.js must not contain the dropped wording "${banned}"`)
+}
+
 // --- failure modes stay distinguishable ---
 async function rawCall(payload) {
   const req = new EventEmitter()
@@ -593,8 +633,99 @@ const emptyResult = await revealTool.execute({ command: 'echo nothing useful her
   signal: new AbortController().signal,
 })
 assert.equal(emptyResult.status, 'completed')
-assert.match(emptyResult.output, /found nothing to show/)
+assert.match(emptyResult.output, /没有解析到可展示的条目/)
 ctx.subprocess.spawnTerminal = defaultSpawn
+
+
+// --- secret_ask: the destination is decided by the call, not by the checkbox ---
+const secretAsk = registeredTools.get('secret_ask')
+assert.equal(secretAsk?.name, 'secret_ask')
+assert.equal(secretAsk.output.schema.properties.path.type, 'string')
+
+const askVault = secretAsk.execute(
+  { prompt: 'Tavily search needs a key', label: 'Tavily', ref: 'TAVILY_API_KEY' },
+  { agent: { session: {} }, callId: 'self-test-ask-vault', signal: new AbortController().signal },
+)
+const askCard = await awaitState('self-test-ask-vault', registeredRoute, (next) => next.state === 'awaiting')
+assert.equal(askCard.ask, 'vault', 'the card learns the value is going to the credential store')
+assert.equal(askCard.secret, true)
+// The card hides the checkbox, so the host must store it even if a stale client says no.
+await callApi({ op: 'submit', callId: 'self-test-ask-vault', challenge: askCard.challenge, value: 'tvly-DO-NOT-LEAK', save: false })
+const askVaultResult = await askVault
+assert.equal(askVaultResult.status, 'completed')
+assert.equal(askVaultResult.vault_ref, 'TAVILY_API_KEY')
+assert.equal(askVaultResult.output.includes('tvly-DO-NOT-LEAK'), false, 'the value never reaches the result')
+assert.equal(credentials.get('TAVILY_API_KEY'), 'tvly-DO-NOT-LEAK', 'the host stored it anyway')
+
+const askFile = secretAsk.execute(
+  { prompt: 'ssh password for the jump host', label: 'Jump host', deliver: 'file' },
+  { agent: { session: {} }, callId: 'self-test-ask-file', signal: new AbortController().signal },
+)
+const fileCard = await awaitState('self-test-ask-file', registeredRoute, (next) => next.state === 'awaiting')
+assert.equal(fileCard.ask, 'file')
+await callApi({ op: 'submit', callId: 'self-test-ask-file', challenge: fileCard.challenge, value: 'file-handoff-DO-NOT-LOG', save: true })
+const askFileResult = await askFile
+assert.equal(askFileResult.status, 'completed')
+assert.ok(askFileResult.path, 'a file handoff returns the path')
+assert.equal(statSync(askFileResult.path).mode & 0o777, 0o600, 'the handoff file is 0600')
+assert.equal(statSync(join(tmpdir(), 'dsh-secret-form-handoff')).mode & 0o777, 0o700, 'its directory is 0700')
+assert.equal(readFileSync(askFileResult.path, 'utf8'), 'file-handoff-DO-NOT-LOG')
+assert.equal([...credentials.values()].includes('file-handoff-DO-NOT-LOG'), false, 'file delivery does not store the value')
+assert.equal(askFileResult.output.includes('file-handoff-DO-NOT-LOG'), false, 'the result carries the path only')
+unlinkSync(askFileResult.path)
+
+// --- a stored credential is written into the PTY without a card ---
+class CredentialTerminal {
+  output = new PassThrough()
+  writes = []
+  done
+  finish
+
+  constructor() {
+    this.done = new Promise((resolve) => { this.finish = resolve })
+  }
+
+  async write(text) {
+    this.writes.push(text)
+    this.output.write('applied\r\n')
+    this.output.end()
+    this.finish({ exitCode: 0, signal: undefined })
+  }
+
+  async terminate() {}
+}
+credentials.set('TEST_SSH_PASSWORD', 'stored-ssh-DO-NOT-LEAK')
+const credentialTerminal = new CredentialTerminal()
+const spawnBeforeCredential = ctx.subprocess.spawnTerminal
+ctx.subprocess.spawnTerminal = async () => {
+  setTimeout(() => credentialTerminal.output.write("root@host's password: "), 5)
+  return credentialTerminal
+}
+const injectedRun = secretExec.execute(
+  { command: 'ssh host sudo passwd', prompt: 'unused', credential: 'TEST_SSH_PASSWORD' },
+  { agent: { session: {} }, callId: 'self-test-credential', signal: new AbortController().signal },
+)
+const injectedResult = await injectedRun
+assert.equal(injectedResult.status, 'completed', 'the stored credential satisfied the prompt')
+assert.equal(credentialTerminal.writes.includes('stored-ssh-DO-NOT-LEAK\r'), true, 'it was written to the pty')
+assert.equal(injectedResult.output.includes('stored-ssh-DO-NOT-LEAK'), false, 'and redacted from the result')
+ctx.subprocess.spawnTerminal = spawnBeforeCredential
+
+// --- an unknown reference falls back to the card instead of failing ---
+const fallbackTerminal = new CredentialTerminal()
+ctx.subprocess.spawnTerminal = async () => {
+  setTimeout(() => fallbackTerminal.output.write("root@host's password: "), 5)
+  return fallbackTerminal
+}
+const fallbackRun = secretExec.execute(
+  { command: 'ssh host sudo passwd', prompt: 'stored reference is gone', credential: 'NO_SUCH_REFERENCE' },
+  { agent: { session: {} }, callId: 'self-test-credential-missing', signal: new AbortController().signal },
+)
+const fallbackState = await awaitState('self-test-credential-missing', registeredRoute, (next) => next.state === 'awaiting')
+assert.equal(fallbackState.state, 'awaiting', 'a missing reference opens the card instead of failing')
+await callApi({ op: 'cancel', callId: 'self-test-credential-missing' })
+assert.equal((await fallbackRun).status, 'cancelled')
+ctx.subprocess.spawnTerminal = spawnBeforeCredential
 
 for (const cleanup of cleanups.reverse()) cleanup()
 console.log('self-test passed: host receives secret in memory, injects via PTY, redacts output, stores only after opt-in, reports a rejection reason on retry, stops waiting when the CLI exits, and reveals stored secrets without putting a value in the tool result')

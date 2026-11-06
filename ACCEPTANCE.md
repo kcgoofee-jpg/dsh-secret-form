@@ -35,7 +35,7 @@ npm run self-test && npm run check-tokens && npm run check-readme
 | 卡片标题 | `猫头鹰… · 当前密码` / `· 新密码` / `· 确认新密码`，逐张变化 |
 | 第三张之后 | 三个输入框都有圆点，长度与填写一致 |
 | 强度条 | 新密码不足 12 位时提交禁用、条为红；够 12 位转绿 |
-| 取消 | 中途按 Esc，结果应为 `cancelled` + 「已填内容全部丢弃，浏览器未被修改」 |
+| 取消 | 中途按 Esc，结果应为 `cancelled` + 「已取消输入。浏览器未被修改。」 |
 
 ---
 
@@ -163,6 +163,38 @@ npm run self-test && npm run check-tokens && npm run check-readme
 | 关闭 | 点「完成」→ `completed`；点 × / Esc → `cancelled` |
 | 勾选保存 | 结果末尾出现 `DSH_SECRET_…_KEYNAME`，`~/.dsh/.credentials.yaml` 里能对应上 |
 | 命令中途要密码 | 先弹输入卡（ssh 私钥口令），填完才出密钥卡 |
+
+---
+
+## H. 交付目的地（`secret_ask`）
+
+```json
+{
+  "deliver": "file",
+  "label": "文件交接",
+  "prompt": "值写进 0600 临时文件，20 分钟后自动删除",
+  "rules": { "minLength": 4 }
+}
+```
+
+| 判据 | 预期 |
+|---|---|
+| 卡片 | **没有**「保存到凭据库」勾选（目的地由调用决定，不是用户选） |
+| 结果 | `completed` + `Path: /tmp/dsh-secret-form-handoff/secret-…`，**不含值** |
+| 文件 | `stat` 为 `0600`，目录 `0700`，20 分钟后消失 |
+| vault 模式 | `deliver: "vault"` + `ref: "X"` → 结果只有 `vault_ref: X`，值不出现在结果里 |
+
+## I. 用已存凭据直投（`credential`）
+
+```json
+{ "command": "sudo -v", "prompt": "无需弹卡", "credential": "TEST_REF" }
+```
+
+| 判据 | 预期 |
+|---|---|
+| 凭据存在 | 不弹卡，值直接写进 PTY，结果里被脱敏 |
+| 凭据不存在 | 回落成卡片，不会静默失败 |
+| 被拒一次 | 第二次提示改成弹卡，不重放同一个值 |
 
 ---
 

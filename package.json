@@ -1,7 +1,7 @@
 {
   "name": "dsh-secret-form",
-  "version": "0.2.0",
-  "description": "Secure secret cards for DSH: terminal PTY, sidebar browser, Ego, and reveal stored secrets without exposing them to the model",
+  "version": "0.3.0",
+  "description": "One card for the whole secret chain in DSH: ask, deliver into a terminal or the sidebar browser, reveal stored secrets, and hand a value over as a vault reference or a private file",
   "type": "module",
   "main": "lib/index.js",
   "exports": {
@@ -15,6 +15,7 @@
     "client.js",
     "cordis.patch.yml",
     "README.md",
+    "COMPARISON.md",
     "ACCEPTANCE.md",
     "PUBLISH.md",
     "LICENSE",
@@ -59,11 +60,14 @@
   },
   "homepage": "https://github.com/kcgoofee-jpg/dsh-secret-form#readme",
   "keywords": [
-    "dsh-plugin",
+    "credential",
     "deepseek-harness",
-    "secret",
-    "password",
+    "dsh-plugin",
     "form",
+    "password",
+    "secret",
+    "secret-delivery",
+    "totp",
     "webview"
   ]
 }

@@ -78,7 +78,7 @@
       function strengthNote(value, rules, checks, score) {
         if (String(value ?? '').length === 0) return ''
         const missing = checks.filter((check) => !check.ok)
-        if (missing.length === 0) return '满足全部要求'
+        if (missing.length === 0) return '符合要求'
         if (rules && Number.isInteger(rules.minLength)) {
           const need = rules.minLength - [...String(value)].length
           if (need > 0) return `还差 ${need} 位`
@@ -89,6 +89,11 @@
 
       // Chrome remembers "save to vault" the way it remembers a form: one choice covers the
       // whole form, and the next form starts from the last answer instead of resetting.
+      // The host hashes the client.js it serves and answers every probe with it. When the
+      // hash differs from the one this page was loaded with, the browser half is stale:
+      // reload once, and only while no card is open, so a typed value is never thrown away.
+      const BUILD_KEY = 'dsh-secret-form:client-build'
+
       const SAVE_KEY = 'dsh-secret-form:save-to-vault'
       function readSavePref() {
         try { return window.localStorage.getItem(SAVE_KEY) === '1' } catch { return false }
@@ -337,6 +342,9 @@
         const inputRef = React.useRef(null)
         // An account name is not a credential: no mask, no strength meter, no vault checkbox.
         const isSecret = state.secret !== false
+        // `secret_ask` fixes the destination before the card opens, so the checkbox is not a
+        // choice there: the host enforces it either way.
+        const forcedSave = state.ask === 'vault' ? true : state.ask === 'file' ? false : undefined
 
         React.useEffect(() => {
           inputRef.current?.focus()
@@ -352,10 +360,11 @@
           setBusy(true)
           setError('')
           try {
-            const saveChoice = isSecret ? save : false
+            const saveChoice = forcedSave === undefined ? (isSecret ? save : false) : forcedSave
             await api({ op: 'submit', callId, challenge: state.challenge, value, save: saveChoice })
             setValue('')
-            onSettled('submit', saveChoice)
+            if (forcedSave === undefined) onSettled('submit', saveChoice)
+            else onSettled('submit')
           } catch (err) {
             setError(err?.message || '提交失败，请重试。')
             setBusy(false)
@@ -366,7 +375,7 @@
           else if (event.key === 'Enter' && !event.shiftKey) { event.preventDefault(); void submit() }
         }
 
-        const retry = Number(state.promptNumber) > 1
+        const retry = Number(state.attempt) > 1
         const checks = evaluateRules(value, state.rules)
         const strength = scoreStrength(value, state.rules, checks)
         const detail = strengthNote(value, state.rules, checks, strength)
@@ -378,7 +387,7 @@
             h('header', { className: 'dsh-secret-head' },
               h('div', { className: 'dsh-secret-heading', id: 'dsh-secret-heading' }, label || '安全输入'),
               h('button', { className: 'dsh-secret-close', type: 'button', onClick: () => void cancel(), disabled: busy, 'aria-label': 'Cancel' }, '×')),
-            retry ? h('div', { className: 'dsh-secret-again' }, `第 ${state.promptNumber}/${state.maxPromptCount ?? 8} 次输入`) : null,
+            retry ? h('div', { className: 'dsh-secret-again' }, `第 ${state.attempt}/${state.maxPromptCount ?? 8} 次`) : null,
             state.context ? h('div', { className: 'dsh-secret-context' }, state.context) : null,
             // The box exists for a terminal's own prompt line ("Password:"). A browser field
             // has nothing to add -- its name is already the title.
@@ -386,7 +395,7 @@
             state.feedback ? h('div', { className: 'dsh-secret-feedback' }, state.feedback) : null,
             h('div', { className: 'dsh-secret-field' },
               h('div', { className: 'dsh-secret-inputwrap' },
-                h('input', { ref: inputRef, id: 'dsh-secret-value', className: 'dsh-secret-input', type: !isSecret || visible ? 'text' : 'password', value, autoComplete: state.autocomplete || (isSecret ? 'new-password' : 'username'), onChange: (event) => setValue(event.target.value), onPaste: (event) => event.stopPropagation(), disabled: busy, maxLength: 4096,
+                h('input', { ref: inputRef, id: 'dsh-secret-value', className: 'dsh-secret-input', 'aria-label': state.label || '输入', type: !isSecret || visible ? 'text' : 'password', value, autoComplete: state.autocomplete || (isSecret ? 'new-password' : 'username'), onChange: (event) => setValue(event.target.value), onPaste: (event) => event.stopPropagation(), disabled: busy, maxLength: 4096,
                   'aria-invalid': error ? 'true' : undefined,
                   'aria-describedby': [note ? 'dsh-secret-note' : '', error ? 'dsh-secret-error' : ''].filter(Boolean).join(' ') || undefined }),
                 isSecret
@@ -397,9 +406,9 @@
                 : null,
               isSecret && note ? h('div', { className: 'dsh-secret-note', id: 'dsh-secret-note', 'aria-live': 'polite' }, note) : null,
               error ? h('div', { className: 'dsh-secret-error', id: 'dsh-secret-error', role: 'alert' }, error) : null),
-            isSecret ? h('label', { className: 'dsh-secret-save' },
+            isSecret && forcedSave === undefined ? h('label', { className: 'dsh-secret-save' },
               h('input', { type: 'checkbox', checked: save, onChange: (event) => setSave(event.target.checked), disabled: busy }),
-              h('span', null, '安全保存到凭据库')) : null,
+              h('span', null, '保存到凭据库')) : null,
             h('footer', { className: 'dsh-secret-foot' },
               h('div', { className: 'dsh-secret-hint' }, '不会进入对话记录。'),
               h('div', { className: 'dsh-secret-actions' },
@@ -478,12 +487,12 @@
                     h('button', { className: 'dsh-secret-mini', type: 'button', onClick: () => void copyOne(entry), disabled: busy }, copied === entry.key ? '已复制' : '复制'))),
                 h('div', { className: `dsh-secret-reveal-value${entry.secret && !shown.has(entry.key) ? ' masked' : ''}` },
                   entry.secret && !shown.has(entry.key) ? MASK : (entry.value.length > 0 ? entry.value : '（空）'))))),
-            reveal.truncated ? h('div', { className: 'dsh-secret-note' }, '条目太多，只显示了一部分。') : null,
+            reveal.truncated ? h('div', { className: 'dsh-secret-note' }, '只显示了一部分。') : null,
             h('label', { className: 'dsh-secret-save' },
               h('input', { type: 'checkbox', checked: save, onChange: (event) => setSave(event.target.checked), disabled: busy }),
               h('span', null, '把密钥保存到凭据库')),
             h('footer', { className: 'dsh-secret-foot' },
-              h('div', { className: 'dsh-secret-hint' }, '只在这个卡片里，不会进入对话记录。'),
+              h('div', { className: 'dsh-secret-hint' }, '不会进入对话记录。'),
               h('div', { className: 'dsh-secret-actions' },
                 h('button', { className: 'dsh-secret-button', type: 'button', onClick: () => void copyAll(), disabled: busy }, copied === '__all__' ? '已复制' : '全部复制'),
                 h('button', { className: 'dsh-secret-button primary', type: 'button', onClick: () => void settle('reveal-ack'), disabled: busy }, busy ? '处理中…' : '完成')))))
@@ -551,10 +560,10 @@
         }
 
         const status = reveal
-          ? `查看 ${reveal.entries.length} 项，只在这个卡片里`
+          ? `查看 ${reveal.entries.length} 项`
           : state.state === 'running'
-            ? '正在读取…'
-            : '正在启动受控终端…'
+            ? '读取中…'
+            : '启动中…'
         return h(React.Fragment, null,
           h('div', { className: 'dsh-secret-card', 'data-secret-form-call': callId },
             h('div', { className: 'dsh-secret-icon' }, h(Icon)),
@@ -644,10 +653,10 @@
         }
 
         const status = awaiting
-          ? (Number(state.promptNumber) > 1 ? `打开安全表单 · 第 ${state.promptNumber}/${state.maxPromptCount ?? 8} 次` : '打开安全表单')
+          ? '待输入'
           : state.state === 'running'
-            ? '正在等待终端提示…'
-            : '正在启动受控终端…'
+            ? '等待提示…'
+            : '启动中…'
 
         return h(React.Fragment, null,
           h('div', { className: 'dsh-secret-card', 'data-secret-form-call': callId },
@@ -699,9 +708,23 @@
               ready: el.tagName.toLowerCase() === 'webview' ? el.getAttribute('src') !== null : true,
             }))
             const key = `${window.location.href}|${JSON.stringify(views)}`
-            if (key === lastProbeKey) return
-            lastProbeKey = key
-            void api({ op: 'probe', payload: { views, href: window.location.href, at: new Date().toISOString() } }).catch(() => {})
+            const changed = key !== lastProbeKey
+            if (changed) lastProbeKey = key
+            // Always ask: the answer carries the served build, which is how a changed
+            // client.js reaches a page that has no reload shortcut.
+            void api({ op: 'probe', payload: { views, href: window.location.href, at: new Date().toISOString() } })
+              .then((result) => {
+                const build = result && result.build
+                if (!build) return
+                let seen = ''
+                try { seen = window.localStorage.getItem(BUILD_KEY) || '' } catch { /* storage may be off */ }
+                if (seen && seen !== build && activeCallIds.size === 0) {
+                  window.location.reload()
+                  return
+                }
+                try { window.localStorage.setItem(BUILD_KEY, build) } catch { /* storage may be off */ }
+              })
+              .catch(() => { /* the host may be restarting; the next tick retries */ })
           } catch { /* a probe must never break the panel */ }
         }
         const probeTimer = setInterval(probeTick, 2000)
