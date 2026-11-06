@@ -1,0 +1,14 @@
+# One-time terminal secret input. Uses services already shipped in DSH Desktop.
+- insert:
+    - id: secret-form
+      name: dsh-secret-form
+      inject: [tools, webServer, subprocess, sandboxPolicy, workingDirectory, credentials]
+      config:
+        timeoutMs: 120000
+        maxPromptCount: 8
+        maxOutputChars: 6000
+        # Extra prompt regexes, matched case-insensitively against the tail of the
+        # terminal output, for CLIs the built-in noun table does not cover.
+        # extraPromptPatterns:
+        #   - 'enter\s+(?:the\s+)?unlock\s+code'
+        #   - '解锁口令'

@@ -1,0 +1,69 @@
+{
+  "name": "dsh-secret-form",
+  "version": "0.1.0",
+  "description": "Secure secret-input cards for DSH: terminal PTY, sidebar browser, and Ego",
+  "type": "module",
+  "main": "lib/index.js",
+  "exports": {
+    ".": "./lib/index.js",
+    "./client": "./client.js",
+    "./locale/*.json": "./locale/*.json",
+    "./icon": "./icon.svg"
+  },
+  "files": [
+    "lib",
+    "client.js",
+    "cordis.patch.yml",
+    "README.md",
+    "ACCEPTANCE.md",
+    "PUBLISH.md",
+    "LICENSE",
+    "scripts",
+    "locale/*.json",
+    "icon.svg"
+  ],
+  "dsh": {
+    "bundle": {
+      "patch": "./cordis.patch.yml"
+    },
+    "client": {
+      "platform": "web",
+      "inject": [
+        "@deepseek-ai/dsh-client-ui-slots",
+        "@deepseek-ai/dsh-client-ui-tool"
+      ]
+    },
+    "compatibility": {
+      "dsh": ">=0.2.2-rc.1 <0.3.0",
+      "profiles": [
+        "desktop"
+      ]
+    }
+  },
+  "peerDependencies": {
+    "@deepseek-ai/cordis": "~4.1.0"
+  },
+  "engines": {
+    "node": ">=20"
+  },
+  "scripts": {
+    "self-test": "node scripts/self-test.mjs",
+    "check-tokens": "node scripts/check-tokens.mjs",
+    "check-readme": "node scripts/check-readme.mjs",
+    "verify": "node scripts/self-test.mjs && node scripts/check-tokens.mjs && node scripts/check-readme.mjs && node --check client.js && node --check lib/browser.js && echo 'all checks passed'"
+  },
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/kcgoofee-jpg/dsh-secret-form"
+  },
+  "homepage": "https://github.com/kcgoofee-jpg/dsh-secret-form#readme",
+  "keywords": [
+    "dsh-plugin",
+    "deepseek-harness",
+    "secret",
+    "password",
+    "form",
+    "webview"
+  ]
+}
