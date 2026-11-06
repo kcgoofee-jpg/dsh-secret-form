@@ -45,7 +45,7 @@
           "source": {
             "type": "git",
             "url": "https://github.com/kcgoofee-jpg/dsh-secret-form",
-            "commit": "5d927a2bb2723345bfbf25cdaa326b023acbf29d"
+            "commit": "813ca6ac0fa4bdf5ef83a0040aebb1c407cce448"
           },
           "engines": {
             "dsh": ">=0.2.2-rc.1 <0.3.0"
