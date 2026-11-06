@@ -477,8 +477,19 @@ const browserCancelled = await browserRun
 assert.equal(browserCancelled.status, 'cancelled')
 assert.match(browserCancelled.output, /浏览器未被修改/)
 
-// --- copy guard: the wording this project deliberately dropped must not come back ---
+// --- every registered tool has a card renderer ---
+// A tool registered only on the host half still runs, but its card never renders and the
+// user sees nothing while the call waits. That wiring is invisible in a unit test, so it
+// is checked here against the client's row table.
 const clientSource = readFileSync(resolve(here, '../client.js'), 'utf8')
+const rowTable = clientSource.match(/const rows = \{([^}]*)\}/)
+assert.ok(rowTable, 'client.js registers a row table')
+const renderedKeys = new Set([...rowTable[1].matchAll(/([A-Za-z_][A-Za-z0-9_]*)\s*:/g)].map((match) => match[1]))
+for (const toolName of registeredTools.keys()) {
+  assert.equal(renderedKeys.has(toolName), true, `tool ${toolName} has no client row, so its card would never appear`)
+}
+
+// --- copy guard: the wording this project deliberately dropped must not come back ---
 for (const banned of ['满足全部要求', '安全保存到凭据库', '正在启动受控终端', '正在等待终端提示', '打开安全表单']) {
   assert.equal(clientSource.includes(banned), false, `client.js must not contain the dropped wording "${banned}"`)
 }

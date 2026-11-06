@@ -164,6 +164,8 @@ config:
 
 `secret_browser` 的 `fields[]` 每项也能带 `credential`，那一栏就不弹卡了。
 
+侧边栏没开、`engine: "dsh"` 找不到 webview 时，会回退到 Ego Lite，并在结果第一行写明换了引擎——回退不是静默的。
+
 ## 安全
 
 - `command`、`prompt`、`label` 是普通工具参数，会进工具记录；**永远不要把密钥写在里面**。

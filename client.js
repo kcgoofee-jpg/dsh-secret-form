@@ -681,7 +681,7 @@
         // terminal PTY and the Ego Lite browser share one host-side request map and
         // one status endpoint, so only the tool key list differs. `secret_reveal` reads
         // instead of writes, so it gets the reveal variant of the same card.
-        const rows = { secret_exec: SecretExecRow, secret_browser: SecretExecRow, secret_reveal: SecretRevealRow }
+        const rows = { secret_exec: SecretExecRow, secret_browser: SecretExecRow, secret_ask: SecretExecRow, secret_reveal: SecretRevealRow }
         for (const [key, Row] of Object.entries(rows)) {
           ctx.slots.inject('tool.call.toolview', () => ctx.slots.register({
             name: 'tool.call.toolview',
