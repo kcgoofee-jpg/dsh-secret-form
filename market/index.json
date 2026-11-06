@@ -1,0 +1,57 @@
+{
+  "format": 1,
+  "title": {
+    "en": "davidzhao plugins",
+    "zh": "davidzhao 插件"
+  },
+  "description": {
+    "en": "DSH plugins by kcgoofee-jpg.",
+    "zh": "kcgoofee-jpg 的 DSH 插件。"
+  },
+  "metadata": {
+    "categories": {
+      "security": {
+        "title": {
+          "en": "Security",
+          "zh": "安全"
+        }
+      }
+    }
+  },
+  "plugins": [
+    {
+      "name": "dsh-secret-form",
+      "title": {
+        "en": "Secure input cards",
+        "zh": "安全输入卡片"
+      },
+      "description": {
+        "en": "Collects passwords through a card instead of the conversation: terminal prompts, sidebar browser forms, and Ego Lite.",
+        "zh": "通过卡片向用户索取密码，而不是让值进入对话：终端提示、侧边栏浏览器表单、Ego Lite。"
+      },
+      "icon": "icons/dsh-secret-form.svg",
+      "author": "kcgoofee-jpg",
+      "homepage": "https://github.com/kcgoofee-jpg/dsh-secret-form#readme",
+      "repository": {
+        "url": "https://github.com/kcgoofee-jpg/dsh-secret-form"
+      },
+      "metadata": {
+        "category": "security"
+      },
+      "versions": [
+        {
+          "version": "0.1.0",
+          "publishTimestamp": 1793963373,
+          "source": {
+            "type": "git",
+            "url": "https://github.com/kcgoofee-jpg/dsh-secret-form",
+            "commit": "782832fd68ba5da9b07a981b0a4b137912e90413"
+          },
+          "engines": {
+            "dsh": ">=0.2.2-rc.1 <0.3.0"
+          }
+        }
+      ]
+    }
+  ]
+}
