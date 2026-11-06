@@ -26,8 +26,8 @@
         "zh": "安全输入卡片"
       },
       "description": {
-        "en": "Collects passwords through a card instead of the conversation: terminal prompts, sidebar browser forms, and Ego Lite.",
-        "zh": "通过卡片向用户索取密码，而不是让值进入对话：终端提示、侧边栏浏览器表单、Ego Lite。"
+        "en": "One card for the whole secret chain: ask in a card, deliver into a terminal or the sidebar browser, reveal stored secrets to the user only, and hand a value over as a credential reference or a private 0600 file.",
+        "zh": "一张卡片装下敏感值的整条链：卡片索取、投递进终端或内置浏览器、把已存密钥只展示给人看、以及把值交付成凭据引用名或 0600 私有文件。"
       },
       "icon": "icons/dsh-secret-form.svg",
       "author": "kcgoofee-jpg",
@@ -40,12 +40,12 @@
       },
       "versions": [
         {
-          "version": "0.1.0",
-          "publishTimestamp": 1793963373,
+          "version": "0.3.0",
+          "publishTimestamp": 1793963374,
           "source": {
             "type": "git",
             "url": "https://github.com/kcgoofee-jpg/dsh-secret-form",
-            "commit": "782832fd68ba5da9b07a981b0a4b137912e90413"
+            "commit": "5d927a2bb2723345bfbf25cdaa326b023acbf29d"
           },
           "engines": {
             "dsh": ">=0.2.2-rc.1 <0.3.0"
